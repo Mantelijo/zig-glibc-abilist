@@ -18,14 +18,13 @@ const ZigTarget = struct {
 // Symbol struct is used to define binary encoding of symbol mapping.
 const Symbol = struct {
     name: []const u8,
-    inclusions: std.ArrayList(SymbolInclusion),
+
+    // keys - target names
+    inclusions: std.StringHashMap(std.ArrayList(SymbolInclusion)),
 };
 
 // SymbolInclusion describes where this symbol can be found.
 const SymbolInclusion = struct {
-    // Multiple targets for current glibc version and lib combination.
-    target_names: std.ArrayList([]const u8),
-
     // Multiple versions can have same symbol in same library.
     // Names are later converted to index based bitsets
     glibc_versions: std.ArrayList([]const u8),
@@ -265,7 +264,7 @@ pub fn main() !void {
                     std.process.exit(1);
                 };
                 var lines_it = std.mem.tokenize(u8, contents, "\n");
-                symbols: while (lines_it.next()) |line| {
+                while (lines_it.next()) |line| {
                     var tok_it = std.mem.tokenize(u8, line, " ");
                     const ver = tok_it.next().?;
                     const name = tok_it.next().?;
@@ -320,58 +319,108 @@ pub fn main() !void {
                     if (!all_syms_gop.found_existing) {
                         all_syms_gop.value_ptr.* = Symbol{
                             .name = name,
-                            .inclusions = std.ArrayList(SymbolInclusion).init(allocator),
+                            .inclusions = std.StringHashMap(std.ArrayList(SymbolInclusion)).init(allocator),
                         };
                     }
-                    var s_inclusion = SymbolInclusion{
-                        .target_names = std.ArrayList([]const u8).init(allocator),
-                        .glibc_versions = std.ArrayList([]const u8).init(allocator),
-                        .lib = lib_i,
-                    };
 
-                    // find if inclusion for current library already exists
-                    if (all_syms_gop.value_ptr.*.inclusions.items.len > 0) {
-                        for (all_syms_gop.value_ptr.*.inclusions.items) |*sym_inclusion| {
-                            if (sym_inclusion.lib == lib_i) {
-                                // append available targets to inclusion only if they are not already added
-                                for (target_names.items) |target_name| {
-                                    var found = false;
-                                    for (sym_inclusion.*.target_names.items) |added_name| {
-                                        if (std.mem.eql(u8, added_name, target_name)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!found) {
-                                        try sym_inclusion.*.target_names.append(target_name);
-                                    }
-                                }
+                    // Save inclusion lists for current target names
+                    for(target_names.items)|target_name|{
+                        var s_inclusion = SymbolInclusion{
+                            .glibc_versions = std.ArrayList([]const u8).init(allocator),
+                            .lib = lib_i,
+                        };
 
-                                // Append unique glibc versions to version list
+                        var inclusions_gop = try all_syms_gop.value_ptr.*.inclusions.getOrPut(target_name);
+                        if(!inclusions_gop.found_existing){
+                            // Init and add initial inclusion and continue
+                            inclusions_gop.value_ptr.* = std.ArrayList(SymbolInclusion).init(allocator);
+                            try s_inclusion.glibc_versions.append(ver);
+                            try inclusions_gop.value_ptr.*.append(s_inclusion);
+                            continue;
+                        }
+
+                        // Find if inclusion exsits for current library and append new version
+                        for(inclusions_gop.value_ptr.*.items)|*sym_inclusion|{
+                            if(sym_inclusion.lib == lib_i){
                                 var found = false;
-                                for (sym_inclusion.*.glibc_versions.items) |glibc_version| {
-                                    if (std.mem.eql(u8, glibc_version, ver)) {
+                                for(sym_inclusion.glibc_versions.items)|version_string|{
+                                    if(std.mem.eql(u8, version_string, ver)){
                                         found = true;
                                         break;
                                     }
                                 }
-                                if (!found) {
-                                    try sym_inclusion.*.glibc_versions.append(ver);
+                                if(!found){
+                                    try sym_inclusion.glibc_versions.append(ver);
                                 }
-
-                                continue :symbols;
                             }
                         }
                     }
-                    // if current lib does not exist in the list - add new inclusion
-                    for (target_names.items) |target_name| {
-                        try s_inclusion.target_names.append(target_name);
-                        try s_inclusion.glibc_versions.append(ver);
-                    }
-                    try all_syms_gop.value_ptr.*.inclusions.append(s_inclusion);
+
+                    // TODO remove below
+
+                    // // find if inclusion for current library already exists
+                    // if (all_syms_gop.value_ptr.*.inclusions.items.len > 0) {
+                    //     for (all_syms_gop.value_ptr.*.inclusions.items) |*sym_inclusion| {
+                    //         if (sym_inclusion.lib == lib_i) {
+                    //             // append available targets to inclusion only if they are not already added
+                    //             for (target_names.items) |target_name| {
+                    //                 var found = false;
+                    //                 for (sym_inclusion.*.target_names.items) |added_name| {
+                    //                     if (std.mem.eql(u8, added_name, target_name)) {
+                    //                         found = true;
+                    //                         break;
+                    //                     }
+                    //                 }
+                    //                 if (!found) {
+                    //                     try sym_inclusion.*.target_names.append(target_name);
+                    //                 }
+                    //             }
+
+                    //             // Append unique glibc versions to version list
+                    //             var found = false;
+                    //             for (sym_inclusion.*.glibc_versions.items) |glibc_version| {
+                    //                 if (std.mem.eql(u8, glibc_version, ver)) {
+                    //                     found = true;
+                    //                     break;
+                    //                 }
+                    //             }
+                    //             if (!found) {
+                    //                 try sym_inclusion.*.glibc_versions.append(ver);
+                    //             }
+
+                    //             continue :symbols;
+                    //         }
+                    //     }
+                    // }
+                    // // if current lib does not exist in the list - add new inclusion
+                    // for (target_names.items) |target_name| {
+                    //     try s_inclusion.target_names.append(target_name);
+                    //     try s_inclusion.glibc_versions.append(ver);
+                    // }
+                    // try all_syms_gop.value_ptr.*.inclusions.append(s_inclusion);
                 }
             }
         }
+
+        // print all_symbols structure
+        var an_it = all_symbols.iterator();
+        while(an_it.next())|an_entry|{
+            std.debug.print("Symbol: {s}\n", .{an_entry.key_ptr.*});
+
+            // Inclusions
+            var it = an_entry.value_ptr.*.inclusions.iterator();
+            while(it.next())|i_entry|{
+                std.debug.print("\t target: {s}\n", .{i_entry.key_ptr.*});
+                std.debug.print("\t versions: ", .{});
+                for(i_entry.value_ptr.*.items)|inclusions|{
+                    std.debug.print("{s} ", .{@TypeOf(inclusions)});
+                }
+                std.debug.print("\n", .{});
+            }
+            std.debug.print("", .{});
+        }
+
+        std.process.exit(0);
 
         const global_fn_list = blk: {
             var list = std.ArrayList([]const u8).init(allocator);

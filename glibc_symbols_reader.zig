@@ -102,7 +102,8 @@ pub fn readSymbolsFile(allocator: *std.mem.Allocator, symbols_file: std.fs.File)
             }
         }
 
-        // version_indexes is sorted as we check from smallest to largets index
+        // version_indexes is sorted in ascending order
+        // as we check from smallest to largest index
         try versions_in_libs.put(target_name, version_indexes);
     }
 
