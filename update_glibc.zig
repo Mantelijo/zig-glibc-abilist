@@ -412,8 +412,10 @@ pub fn main() !void {
             while(it.next())|i_entry|{
                 std.debug.print("\t target: {s}\n", .{i_entry.key_ptr.*});
                 std.debug.print("\t versions: ", .{});
-                for(i_entry.value_ptr.*.items)|inclusions|{
-                    std.debug.print("{s} ", .{@TypeOf(inclusions)});
+                for(i_entry.value_ptr.*.items)|inclusion|{
+                    for(inclusion.glibc_versions.items)|g_ver|{
+                        std.debug.print("{s} ", .{g_ver});
+                    }
                 }
                 std.debug.print("\n", .{});
             }
@@ -600,39 +602,25 @@ pub fn main() !void {
         try writer.writeAll(symbol.value_ptr.*.name);
         try writer.writeByte(0x00);
 
-        for (symbol.value_ptr.*.inclusions.items) |inclusion, inclusion_i| {
-            var targets_bitmask: u32 = 0;
-            var verlist_bitmask: u64 = 0;
-
-            // Create bitmask for target
-            for (inclusion.target_names.items) |target_name| {
-                const bits = target_name_flags.get(target_name);
-                if (bits) |b| {
-                    targets_bitmask |= b;
+        var inclusions_it = symbol.value_ptr.*.inclusions.iterator();
+        while(inclusions_it.next()) |inclusion_entry| {
+            for(inclusion_entry.value_ptr.*.items)|inclusion|{
+                var verlist_bitmask: u64 = 0;
+                // Create bitmask for glibc version
+                for (inclusion.glibc_versions.items) |version| {
+                    const bits = verlist_flags.get(version);
+                    if (bits) |b| {
+                        verlist_bitmask |= b;
+                    }
                 }
-            }
-            // Last inclusion indicator - 1 << 31 bit set for target bitmask
-            if (inclusion_i == symbol.value_ptr.*.inclusions.items.len - 1) {
-                targets_bitmask |= 1 << 31;
-            }
-            // Write target bitmask
-            const targets_bitmask_bytes = std.mem.asBytes(&targets_bitmask);
-            try writer.writeAll(targets_bitmask_bytes);
+                // Write glibc version bitmask
+                const verlist_bitmask_bytes = std.mem.asBytes(&verlist_bitmask);
+                try writer.writeAll(verlist_bitmask_bytes);
 
-            // Create bitmask for glibc version
-            for (inclusion.glibc_versions.items) |version| {
-                const bits = verlist_flags.get(version);
-                if (bits) |b| {
-                    verlist_bitmask |= b;
-                }
+                // Write lib index as a single byte from a known list (lib_names)
+                const lib_index_bytes = std.mem.asBytes(&@intCast(u8, inclusion.lib));
+                try writer.writeAll(lib_index_bytes);
             }
-            // Write glibc version bitmask
-            const verlist_bitmask_bytes = std.mem.asBytes(&verlist_bitmask);
-            try writer.writeAll(verlist_bitmask_bytes);
-
-            // Write lib index as a single byte from a known list (lib_names)
-            const lib_index_bytes = std.mem.asBytes(&@intCast(u8, inclusion.lib));
-            try writer.writeAll(lib_index_bytes);
         }
     }
 
